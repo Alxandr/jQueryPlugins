@@ -200,7 +200,7 @@
             }
         };
 
-        rev._poll();
+        window.setTimeout(rev._poll);
         return rev;
     };
     
