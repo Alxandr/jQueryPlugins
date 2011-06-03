@@ -194,10 +194,18 @@
                         if(rev._sendQueue.length > 0) {
                             rev.send.apply(rev, rev._sendQueue.shift());
                         }
+                        rev._sendXhr = null;
                     }
                 });
             }
         };
+
+        rev._poll();
+        return rev;
     };
+    
+    $.extend({
+        reverser: reverser
+    });
     
 })(jQuery);
