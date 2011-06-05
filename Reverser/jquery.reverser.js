@@ -12,10 +12,23 @@
     var defaultHandlers = {
         $_requestId: function(id) {
             this.data._requestId = id;
+            this.useSocket = false;
+            this[' _ready']();
         },
         
         $_ping: function() {
             this.send('$_pong');
+        },
+        
+        $_ws: function(socket_url) {
+            var rev = this;
+            this._socket = new WebSocket(socket_url);
+            this._socket.onopen = this[' _ready'];
+            this._socket.onmessage = function(evtMsg) {
+                var textMsg = evtMsg.data;
+                var msg = $.parseJSON(textMsg);
+                rev.handler(msg.name, msg.parameters);
+            };
         }
     };
     var defaultData = {};
@@ -127,8 +140,19 @@
     
     var reverser = function(options, onMessage) {
         var rev = {};
+        rev[' _isReady'] = false;
+        rev[' _ready'] = function() {
+            rev[' _isReady'] = true;
+            if(rev._sendQueue.length > 0) {
+                rev.send.apply(rev, rev._sendQueue.shift());
+            }
+        };
+        rev.isReady = function() {
+            return rev[' _isReady'];
+        };
         var settings = $.extend(true, {}, defaultOptions, options);
         var handler, h;
+        var useWebSocket = webSockets && settings.allowWebSocket;
         h = $.extend(true, {}, defaultHandlers, onMessage);
         var d = $.extend(true, {}, defaultData, settings.data);
         if(typeof onMessage == 'function') {
@@ -154,53 +178,75 @@
                 _debug(e);
             }
             rev._pollXhr = null;
-            rev._poll();
+            if(!rev.useSocket) rev._poll();
         };
         
         rev.options = settings;
         rev.handler = handler;
         rev.data = d;
+        rev.useSocket = useWebSocket;
         rev._sendQueue = [];
         rev._poll = function() {
             if(rev._pollXhr) {
                 rev._pollXhr.abort();
             }
-            rev._pollXhr = $.ajax({
-                global: false,
-                url: rev.options.url,
-                dataType: 'json',
-                data: rev.data,
-                success: pollSuccess
-            });
+            if(!rev.useSocket) {
+                rev._pollXhr = $.ajax({
+                    global: false,
+                    url: rev.options.url,
+                    dataType: 'json',
+                    data: rev.data,
+                    success: pollSuccess
+                });
+            } else {
+                rev._pollXhr = $.ajax({
+                    global: false,
+                    url: rev.options.url,
+                    dataType: 'json',
+                    data: 'ws',
+                    success: pollSuccess
+                });
+            }
         };
         rev.send = function(name, parameters) {
             if(!$.isArray(parameters)) {
                 parameters = Array.prototype.slice.apply(arguments, [1]);
             }
-            if(rev.onsend) rev.onsend(name, parameters);
             
-            if(rev._sendXhr) {
-               rev._sendQueue.push([name, parameters]);
-            } else {
-                var data = toJSON({name: name, parameters: parameters});
-                rev._sendXhr = $.ajax({
-                    global: false,
-                    url: rev.options.url + '?' + $.param(rev.data),
-                    dataType: 'json',
-                    contentType: "application/json; charset=utf-8",
-                    data: data,
-                    type: 'post',
-                    success: function() {
-                        if(rev._sendQueue.length > 0) {
-                            rev.send.apply(rev, rev._sendQueue.shift());
+            if(!rev.isReady()) {
+                rev._sendQueue.push([name, parameters]);
+                return;
+            }
+            
+            if(!rev.useSocket) {
+                if(rev._sendXhr) {
+                   rev._sendQueue.push([name, parameters]);
+                } else {
+                    if(rev.onsend) rev.onsend(name, parameters);
+                    var data = toJSON({name: name, parameters: parameters});
+                    rev._sendXhr = $.ajax({
+                        global: false,
+                        url: rev.options.url + '?' + $.param(rev.data),
+                        dataType: 'json',
+                        contentType: "application/json; charset=utf-8",
+                        data: data,
+                        type: 'post',
+                        success: function() {
+                            if(rev._sendQueue.length > 0) {
+                                rev.send.apply(rev, rev._sendQueue.shift());
+                            }
+                            rev._sendXhr = null;
                         }
-                        rev._sendXhr = null;
-                    }
-                });
+                    });
+                }
+            } else {
+                if(rev.onsend) rev.onsend(name, parameters);
+                var data = toJSON({name: name, parameters: parameters});
+                rev._socket.send(data);
             }
         };
-
-        window.setTimeout(rev._poll);
+        
+        window.setTimeout(rev._poll, 100);
         return rev;
     };
     
